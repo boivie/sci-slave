@@ -139,8 +139,7 @@ class ExecutionThread(threading.Thread):
         threading.Thread.__init__(self)
         self.kill_received = False
 
-    def send_available(self, session_id = None, result = None, output = None,
-                       log_file = None):
+    def send_available(self, session_id, result, output, log_file):
         web.config.last_status = int(time.time())
         print("%s checking in (available)" % web.config.node_id)
 
@@ -160,7 +159,6 @@ class ExecutionThread(threading.Thread):
                     input = {'session_id': session_id})
 
     def run(self):
-        self.send_available()
         while not self.kill_received:
             item = get_item()
 
