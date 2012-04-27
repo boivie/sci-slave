@@ -29,25 +29,6 @@ requestq = Queue()
 cv = threading.Condition()
 
 
-def get_config(path):
-    c = ConfigParser.ConfigParser()
-    c.read(os.path.join(path, "config.ini"))
-    try:
-        return {"node_id": c.get("sci", "node_id")}
-    except ConfigParser.NoOptionError:
-        return None
-    except ConfigParser.NoSectionError:
-        return None
-
-
-def save_config(path, node_id):
-    c = ConfigParser.ConfigParser()
-    c.add_section('sci')
-    c.set("sci", "node_id", node_id)
-    with open(os.path.join(path, "config.ini"), "wb") as configfile:
-        c.write(configfile)
-
-
 def jsonify(**kwargs):
     web.header('Content-Type', 'application/json')
     return json.dumps(kwargs)
@@ -65,69 +46,30 @@ class StartJob:
         return jsonify(status = "started")
 
 
-class GetLog:
-    def GET(self, sid):
-        web.header('Content-type', 'text/plain')
-        web.header('Transfer-Encoding', 'chunked')
-        session = Session.load(sid)
-        if not session:
-            abort(404, "session not found")
-        with open(session.logfile, "rb") as f:
-            while True:
-                data = f.read(4096)
-                if not data:
-                    break
-                yield data
-
-
-def send_available(session_id = None, result = None, output = None,
-                   log_file = None):
-    web.config.last_status = int(time.time())
-    print("%s checking in (available)" % web.config.node_id)
-
-    client = HttpClient(web.config._job_server)
-    client.call("/agent/available/%s" % web.config.node_id,
-                input = {'session_id': session_id,
-                         'result': result,
-                         'output': output,
-                         'log_file': log_file})
-
-
-def send_busy(session_id):
-    web.config.last_status = int(time.time())
-    print("%s checking in (busy)" % web.config.node_id)
-
-    client = HttpClient(web.config._job_server)
-    client.call("/agent/busy/%s" % web.config.node_id,
-                input = {'session_id': session_id})
-
-
-def send_ping():
-    web.config.last_status = int(time.time())
-    print("%s pinging" % web.config.node_id)
-
-    client = HttpClient(web.config._job_server)
-    client.call("/agent/ping/%s" % web.config.node_id,
-                method = "POST")
-
-
-def ttl_expired():
-    if web.config.last_status + EXPIRY_TTL < int(time.time()):
-        return True
-
-
 class StatusThread(threading.Thread):
     def __init__(self):
         threading.Thread.__init__(self)
         self.kill_received = False
+
+    def ttl_expired(self):
+        if web.config.last_status + EXPIRY_TTL < int(time.time()):
+            return True
+
+    def send_ping(self):
+        web.config.last_status = int(time.time())
+        print("%s pinging" % web.config.node_id)
+
+        client = HttpClient(web.config._job_server)
+        client.call("/agent/ping/%s" % web.config.node_id,
+                    method = "POST")
 
     def run(self):
         # Wait a few seconds before starting - there will be an initial
         # status sent from ExecutionThread.
         time.sleep(3)
         while not self.kill_received:
-            if ttl_expired():
-                send_ping()
+            if self.ttl_expired():
+                self.send_ping()
             time.sleep(1)
 
 
@@ -172,8 +114,28 @@ class ExecutionThread(threading.Thread):
         threading.Thread.__init__(self)
         self.kill_received = False
 
+    def send_available(self, session_id = None, result = None, output = None,
+                       log_file = None):
+        web.config.last_status = int(time.time())
+        print("%s checking in (available)" % web.config.node_id)
+
+        client = HttpClient(web.config._job_server)
+        client.call("/agent/available/%s" % web.config.node_id,
+                    input = {'session_id': session_id,
+                             'result': result,
+                             'output': output,
+                             'log_file': log_file})
+
+    def send_busy(self, session_id):
+        web.config.last_status = int(time.time())
+        print("%s checking in (busy)" % web.config.node_id)
+
+        client = HttpClient(web.config._job_server)
+        client.call("/agent/busy/%s" % web.config.node_id,
+                    input = {'session_id': session_id})
+
     def run(self):
-        send_available()
+        self.send_available()
         while not self.kill_received:
             item = get_item()
 
@@ -196,7 +158,7 @@ class ExecutionThread(threading.Thread):
                                     cwd = web.config._path)
             proc.stdin.write(json.dumps(info))
             proc.stdin.close()
-            send_busy(session_id)
+            self.send_busy(session_id)
             return_code = proc.wait()
             session = Session.load(session.id)
             result = 'success'
@@ -223,7 +185,7 @@ class ExecutionThread(threading.Thread):
                 ss_res['url'] = ''
 
             output = session.return_value
-            send_available(session_id, result, output, ss_res['url'])
+            self.send_available(session_id, result, output, ss_res['url'])
 
 
 class Slave(Daemon):
@@ -237,6 +199,23 @@ class Slave(Daemon):
                                     stdout='/dev/stdout',
                                     stderr='/dev/stderr')
 
+    def get_config(self, path):
+        c = ConfigParser.ConfigParser()
+        c.read(os.path.join(path, "config.ini"))
+        try:
+            return {"node_id": c.get("sci", "node_id")}
+        except ConfigParser.NoOptionError:
+            return None
+        except ConfigParser.NoSectionError:
+            return None
+
+    def save_config(self, path, node_id):
+        c = ConfigParser.ConfigParser()
+        c.add_section('sci')
+        c.set("sci", "node_id", node_id)
+        with open(os.path.join(path, "config.ini"), "wb") as configfile:
+            c.write(configfile)
+
     def run(self):
         if not os.path.exists(self.path):
             os.makedirs(self.path)
@@ -247,10 +226,10 @@ class Slave(Daemon):
 
         Session.set_root_path(web.config._path)
 
-        config = get_config(web.config._path)
+        config = self.get_config(web.config._path)
         if not config:
             web.config.node_id = 'A' + random_sha1()
-            save_config(web.config._path, web.config.node_id)
+            self.save_config(web.config._path, web.config.node_id)
         else:
             web.config.node_id = config["node_id"]
 
