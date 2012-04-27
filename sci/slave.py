@@ -47,9 +47,14 @@ class StartJob:
 
 
 class StatusThread(threading.Thread):
-    def __init__(self):
+    def __init__(self, js_url, node_id, nick, port):
         threading.Thread.__init__(self)
         self.kill_received = False
+        self.registered = False
+        self.js = HttpClient(js_url)
+        self.node_id = node_id
+        self.nick = nick
+        self.port = port
 
     def ttl_expired(self):
         if web.config.last_status + EXPIRY_TTL < int(time.time()):
@@ -57,20 +62,40 @@ class StatusThread(threading.Thread):
 
     def send_ping(self):
         web.config.last_status = int(time.time())
-        print("%s pinging" % web.config.node_id)
+        print("%s pinging" % self.node_id)
 
-        client = HttpClient(web.config._job_server)
-        client.call("/agent/ping/%s" % web.config.node_id,
-                    method = "POST")
+        try:
+            self.js.call("/agent/ping/%s" % self.node_id,
+                         method = "POST")
+        except:
+            # Any exceptions while we ping indicate that the jobserver
+            # is down/unavailable - so re-register and hope it works better.
+            print("Exception while pinging - re-registering")
+            self.registered = False
+
+    def send_register(self):
+        print("Registering")
+        web.config.last_status = int(time.time())
+        try:
+            self.js.call("/agent/register",
+                         input = {"id": self.node_id,
+                                  'nick': self.nick,
+                                  "port": self.port,
+                                  "labels": [os.uname()[0], os.uname()[4]]})
+            print("%s registered - listening to %d" % (self.node_id, self.port))
+            self.registered = True
+        except:
+            print("Failed to register. Will try again")
+            self.registered = False
 
     def run(self):
-        # Wait a few seconds before starting - there will be an initial
-        # status sent from ExecutionThread.
-        time.sleep(3)
         while not self.kill_received:
-            if self.ttl_expired():
-                self.send_ping()
-            time.sleep(1)
+            self.send_register()
+            time.sleep(5)
+            while not self.kill_received and self.registered:
+                if self.ttl_expired():
+                    self.send_ping()
+                time.sleep(1)
 
 
 def get_item():
@@ -190,7 +215,7 @@ class ExecutionThread(threading.Thread):
 
 class Slave(Daemon):
     def __init__(self, nickname, jobserver, port = DEFAULT_PORT, path = '.'):
-        self.nickname = nickname
+        self.nick = nickname
         self.jobserver = jobserver
         self.port = port
         self.path = os.path.realpath(path)
@@ -223,26 +248,19 @@ class Slave(Daemon):
         web.config._job_server = self.jobserver
         web.config._path = self.path
         web.config.port = self.port
+        web.config.nick = self.nick
 
         Session.set_root_path(web.config._path)
 
         config = self.get_config(web.config._path)
         if not config:
-            web.config.node_id = 'A' + random_sha1()
+            node_id = 'A' + random_sha1()
             self.save_config(web.config._path, web.config.node_id)
         else:
-            web.config.node_id = config["node_id"]
+            node_id = config["node_id"]
+        web.config.node_id = node_id
 
-        print("Registering")
-        client = HttpClient(web.config._job_server)
-        client.call("/agent/register",
-                    input = {"id": web.config.node_id,
-                             'nick': self.nickname,
-                             "port": self.port,
-                             "labels": [os.uname()[0], os.uname()[4]]})
-        print("%s: Running from %s, listening to %d" % (web.config.node_id, web.config._path, web.config.port))
-
-        status = StatusThread()
+        status = StatusThread(self.jobserver, node_id, self.nick, self.port)
         execthread = ExecutionThread()
         status.start()
         execthread.start()
