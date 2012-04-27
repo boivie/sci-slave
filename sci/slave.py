@@ -8,8 +8,8 @@
     :copyright: (c) 2011 by Victor Boivie
     :license: Apache License 2.0
 """
-from optparse import OptionParser
 import web, json, os, threading, subprocess
+from sci.daemon import Daemon
 from sci.session import Session, time
 from sci.http_client import HttpClient
 from sci.utils import random_sha1
@@ -21,8 +21,8 @@ urls = (
 )
 
 EXPIRY_TTL = 60
+DEFAULT_PORT = 6700
 
-web.config.debug = False
 app = web.application(urls, globals())
 
 requestq = Queue()
@@ -185,6 +185,7 @@ class ExecutionThread(threading.Thread):
 
             session = Session.create(session_id)
             run_job = os.path.join(os.path.dirname(os.path.realpath(__file__)),
+                                   '..',
                                    "run_job.py")
             args = [run_job, web.config._job_server, session_id]
             stdout = open(session.logfile, "w")
@@ -225,55 +226,48 @@ class ExecutionThread(threading.Thread):
             send_available(session_id, result, output, ss_res['url'])
 
 
-if __name__ == "__main__":
-    parser = OptionParser()
-    parser.add_option("-c", "--config", dest = "config",
-                      help = "configuration file to use")
-    parser.add_option("-g", "--debug",
-                      action = "store_true", dest = "debug", default = False,
-                      help = "debug mode - will allow all requests")
-    parser.add_option("-p", "--port", dest = "port", default = 6700,
-                      help = "port to use")
-    parser.add_option("--path", dest = "path", default = ".",
-                      help = "path to use")
+class Slave(Daemon):
+    def __init__(self, nickname, jobserver, port = DEFAULT_PORT, path = '.'):
+        self.nickname = nickname
+        self.jobserver = jobserver
+        self.port = port
+        self.path = os.path.realpath(path)
+        pidfile = '/tmp/scigent_%s' % nickname
+        super(Slave, self).__init__(pidfile,
+                                    stdout='/dev/stdout',
+                                    stderr='/dev/stderr')
 
-    (opts, args) = parser.parse_args()
+    def run(self):
+        if not os.path.exists(self.path):
+            os.makedirs(self.path)
 
-    web.config._job_server = args[0]
+        web.config._job_server = self.jobserver
+        web.config._path = self.path
+        web.config.port = self.port
 
-    if opts.config:
-        raise NotImplemented()
+        Session.set_root_path(web.config._path)
 
-    if not os.path.exists(opts.path):
-        os.makedirs(opts.path)
-    web.config._path = os.path.realpath(opts.path)
+        config = get_config(web.config._path)
+        if not config:
+            web.config.node_id = 'A' + random_sha1()
+            save_config(web.config._path, web.config.node_id)
+        else:
+            web.config.node_id = config["node_id"]
 
-    Session.set_root_path(web.config._path)
+        print("Registering")
+        client = HttpClient(web.config._job_server)
+        client.call("/agent/register",
+                    input = {"id": web.config.node_id,
+                             'nick': self.nickname,
+                             "port": self.port,
+                             "labels": [os.uname()[0], os.uname()[4]]})
+        print("%s: Running from %s, listening to %d" % (web.config.node_id, web.config._path, web.config.port))
 
-    config = get_config(web.config._path)
-    if not config:
-        web.config.node_id = 'A' + random_sha1()
-        save_config(web.config._path, web.config.node_id)
-    else:
-        web.config.node_id = config["node_id"]
-
-    web.config.port = int(opts.port)
-
-    print("Registering")
-    client = HttpClient(web.config._job_server)
-    hostname = "%s-%d" % (os.uname()[1], web.config.port)
-    ret = client.call("/agent/register",
-                      input = {"id": web.config.node_id,
-                               'nick': hostname,
-                               "port": web.config.port,
-                               "labels": ["macos"]})
-    print("%s: Running from %s, listening to %d" % (web.config.node_id, web.config._path, web.config.port))
-
-    status = StatusThread()
-    execthread = ExecutionThread()
-    status.start()
-    execthread.start()
-    web.httpserver.runsimple(app.wsgifunc(), ("0.0.0.0", int(opts.port)))
-    status.kill_received = True
-    execthread.kill_received = True
-    put_item(None)
+        status = StatusThread()
+        execthread = ExecutionThread()
+        status.start()
+        execthread.start()
+        web.httpserver.runsimple(app.wsgifunc(), ("0.0.0.0", self.port))
+        status.kill_received = True
+        execthread.kill_received = True
+        put_item(None)
