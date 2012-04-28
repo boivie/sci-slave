@@ -253,7 +253,7 @@ class Slave(Daemon):
         config = self.get_config(web.config._path)
         if not config:
             node_id = 'A' + random_sha1()
-            self.save_config(web.config._path, web.config.node_id)
+            self.save_config(web.config._path, node_id)
         else:
             node_id = config["node_id"]
         web.config.node_id = node_id
