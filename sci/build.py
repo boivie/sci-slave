@@ -280,10 +280,9 @@ class Build(object):
         recipe_id = result['ref']
 
         # Update the job to use this recipe and lock it to a ref
-        contents = {'recipe': 'private',
-                    'recipe_ref': recipe_id}
-        result = client.call("/job/private",
-                             input = {"contents": contents})
+        contents = "recipe: private\nrecipe_ref: %s" % recipe_id
+        result = client.call("/job/private/raw",
+                             input = {"yaml": contents})
         job_ref = result['ref']
 
         # Create a build
