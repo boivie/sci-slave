@@ -60,7 +60,7 @@ class Bootstrap(object):
         now = datetime.now()
         env.define("SCI_DATETIME", "The current date and time",
                    read_only = True, source = "initial environment",
-                   value = now.strftime("%Y-%m-%d_%H-%M-%S"))
+                   value = now.strftime("%Y-%m-%dT%H:%M:%S"))
 
         return env
 
