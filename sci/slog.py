@@ -26,8 +26,9 @@ class LogItem(object):
 class StepBegun(LogItem):
     type = 'step-begun'
 
-    def __init__(self, name, args, kwargs):
-        self.params = dict(name = name, args = args, kwargs = kwargs)
+    def __init__(self, name, args, kwargs, log_start):
+        self.params = dict(name = name, args = args, kwargs = kwargs,
+                           log_start = log_start)
 
 
 class StepJoinBegun(LogItem):
@@ -47,8 +48,9 @@ class StepJoinDone(LogItem):
 class StepDone(LogItem):
     type = 'step-done'
 
-    def __init__(self, name, time):
-        self.params = dict(name = name, time = int(time))
+    def __init__(self, name, time, log_start, log_end):
+        self.params = dict(name = name, time = int(time),
+                           log_start = log_start, log_end = log_end)
 
 
 class JobBegun(LogItem):

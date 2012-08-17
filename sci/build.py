@@ -44,12 +44,15 @@ class Step(BuildFunction):
         self._is_async = False
 
     def __call__(self, *args, **kwargs):
+        sys.stdout.flush()
+        sys.stderr.flush()
+        log_start = sys.stdout.tell()
         if self._is_async and not self._is_entrypoint:
             ajob = AsyncJob(self.job, self, args, kwargs)
             ajob.run()
             self.job._async_jobs.append(ajob)
             return ajob
-        self.job.slog(StepBegun(self.name, args, kwargs))
+        self.job.slog(StepBegun(self.name, args, kwargs, log_start))
         time_start = time.time()
         self.job._current_step = self
         self.job._print_banner("Step: '%s'" % self.name)
@@ -64,7 +67,10 @@ class Step(BuildFunction):
             self.job.slog(StepJoinDone(self.name, diff))
 
         diff = (time.time() - time_start) * 1000
-        self.job.slog(StepDone(self.name, diff))
+        sys.stdout.flush()
+        sys.stderr.flush()
+        log_end = sys.stdout.tell()
+        self.job.slog(StepDone(self.name, diff, log_start, log_end))
         return ret
 
 
