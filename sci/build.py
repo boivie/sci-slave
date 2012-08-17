@@ -113,9 +113,13 @@ class AsyncJob(object):
             return self.output
         assert(self.state == STATE_RUNNING)
         js = HttpClient(self.job.jobserver)
-        res = js.call('/agent/result/%s' % self.session_id)
-        self.output = res['output']
-        self.result = res['result']
+        while True:
+            res = js.call('/agent/result/%s' % self.session_id)
+            if 'result' in res:
+                self.output = res['output']
+                self.result = res['result']
+                break
+            time.sleep(1)
         self.state = STATE_DONE
         session_no = self.session_id.split('-')[-1]
         diff = (time.time() - self.ts_start) * 1000
