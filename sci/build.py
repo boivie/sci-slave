@@ -8,7 +8,7 @@
     :license: Apache License 2.0
 """
 from optparse import OptionParser
-import re, os, time, sys, types, subprocess, logging, json
+import re, os, time, sys, types, subprocess, logging
 from .environment import Environment
 from .artifacts import Artifacts
 from .session import Session
