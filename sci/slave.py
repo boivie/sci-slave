@@ -193,7 +193,7 @@ class ExecutionThread(threading.Thread):
                 print("Session Logfile: %s" % session.logfile)
                 print("Run-info: %s" % item)
                 session.return_code = return_code
-                session.state = "finished"
+                session.state = "done"
                 session.save()
                 result = 'error'
             else:
